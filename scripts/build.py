@@ -3,6 +3,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 import PyInstaller.__main__
 
@@ -11,6 +13,12 @@ IS_WINDOWS = sys.platform == "win32"
 # 读取版本号
 parser = argparse.ArgumentParser(description="Build AALC")
 parser.add_argument("--version", default="dev", help="AALC Version")
+parser.add_argument(
+    "--package",
+    action="store_true",
+    default=os.environ.get("GITHUB_ACTIONS") == "true",
+    help="Compress the build into a release archive (enabled by default in GitHub Actions)",
+)
 args = parser.parse_args()
 version = args.version
 
@@ -110,19 +118,25 @@ else:
         "PySide6/Qt/lib/libQt6QuickDialogs2QuickImpl.so.6",
         "PySide6/Qt/lib/libQt6QuickLayouts.so.6",
         "PySide6/Qt/lib/libQt6VirtualKeyboardQml.so.6",
-        # 其他不需要的Qt模块
-        "libQt6Pdf.so.6",
-        "libQt6Network.so.6",
     ]
 
+# Linux Qt 库在 _internal 根目录可能还有同名软链接，清理时一并删除。
+if not IS_WINDOWS:
+    redundant_files += [os.path.basename(path) for path in redundant_files if path.startswith("PySide6/Qt/lib/")]
+redundant_files = list(dict.fromkeys(redundant_files))
+removed_count = 0
+skipped_count = 0
 for rel_path in redundant_files:
     abs_path = os.path.join(bundled_internal_dir, rel_path)
-    if os.path.isdir(abs_path):
-        shutil.rmtree(abs_path, ignore_errors=True)
-    elif os.path.isfile(abs_path):
+    if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+        shutil.rmtree(abs_path)
+        removed_count += 1
+    elif os.path.isfile(abs_path) or os.path.islink(abs_path):
         os.remove(abs_path)
+        removed_count += 1
     else:
-        print(f"Warning: {abs_path} not found.")
+        skipped_count += 1
+print(f"清理完成：删除 {removed_count} 项，跳过 {skipped_count} 项（不存在，无需删除）。", flush=True)
 
 # 确保可执行权限（PyInstaller 通常已设置，这里兜底）
 for binary in ("AALC", updater_binary):
@@ -130,17 +144,50 @@ for binary in ("AALC", updater_binary):
     if os.path.isfile(binary_path):
         os.chmod(binary_path, 0o755)
 
-# 压缩为发布包：Windows 用 7z，Linux 优先 7z，缺失时退回 tar.gz
+app_binary = "AALC.exe" if IS_WINDOWS else "AALC"
+print(f"构建完成，可执行文件：{os.path.join('dist', 'AALC', app_binary)}", flush=True)
+if not args.package:
+    print("如需压缩发布包，请添加 --package 参数。", flush=True)
+    sys.exit(0)
+
+# 压缩为发布包：优先 7z/7zz，缺失时退回 tar.gz
 archive_base = f"AALC_{version}_linux" if not IS_WINDOWS else f"AALC_{version}"
-if shutil.which("7z"):
-    ext = "7z"
-    subprocess.run(["7z", "a", "-mx=7", f"{archive_base}.7z", "AALC/*"], cwd="./dist", check=False)
+archive_tool = shutil.which("7z") or shutil.which("7zz")
+ext = "7z" if archive_tool else "tar.gz"
+archive_path = os.path.join("dist", f"{archive_base}.{ext}")
+archive_started = time.monotonic()
+if archive_tool:
+    print(f"开始压缩：{archive_path}（使用 {archive_tool}）", flush=True)
+    archive_command = [archive_tool, "a", "-mx=7", "-bsp1"]
+    if not IS_WINDOWS:
+        # 保留 PyInstaller 的共享库软链接，避免重复压缩其指向的文件。
+        archive_command.append("-snl")
+    archive_command.extend([f"{archive_base}.7z", "AALC/*"])
+    subprocess.run(archive_command, cwd="./dist", check=True)
 else:
-    ext = "tar.gz"
-    shutil.make_archive(
-        os.path.join("dist", archive_base),
-        "gztar",
-        root_dir="./dist",
-        base_dir="AALC",
-    )
-print(f"打包完成: dist/{archive_base}.{ext}")
+    print(f"未找到 7z/7zz，开始 gzip 压缩：{archive_path}（可能需要几分钟）", flush=True)
+    compression_done = threading.Event()
+
+    def report_compression_progress():
+        while not compression_done.wait(10):
+            elapsed = time.monotonic() - archive_started
+            size = os.path.getsize(archive_path) if os.path.isfile(archive_path) else 0
+            print(f"压缩中：已用时 {elapsed:.0f} 秒，当前压缩包 {size / 1024**2:.1f} MiB", flush=True)
+
+    progress_thread = threading.Thread(target=report_compression_progress, daemon=True)
+    progress_thread.start()
+    try:
+        shutil.make_archive(
+            os.path.join("dist", archive_base),
+            "gztar",
+            root_dir="./dist",
+            base_dir="AALC",
+        )
+    finally:
+        compression_done.set()
+        progress_thread.join()
+print(
+    f"打包完成：{archive_path}，{os.path.getsize(archive_path) / 1024**2:.1f} MiB，"
+    f"压缩耗时 {time.monotonic() - archive_started:.0f} 秒",
+    flush=True,
+)
