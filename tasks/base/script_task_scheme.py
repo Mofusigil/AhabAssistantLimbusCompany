@@ -175,6 +175,7 @@ def init_game():
             # init_handle() 再因暂时看不到进程而重复拉起 Steam。
             while not screen.init_handle():
                 sleep(10)
+            auto.prepare_input()
             if cfg.set_windows:
                 screen.set_win()
             return

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from PIL import Image
 
+if not sys.platform.startswith("linux"):
+    pytest.skip("Linux desktop backend", allow_module_level=True)
+
+from module.automation import automation as automation_module
 from module.automation import screenshot as screenshot_module
 from module.automation.input_handlers import linux_input
 from module.game_and_screen.x11_handle import X11Handle
@@ -101,7 +108,7 @@ def test_linux_init_game_does_not_start_steam_twice(monkeypatch) -> None:
 
     game = SimpleNamespace(start_game=Mock())
     screen = SimpleNamespace(init_handle=Mock(return_value=True), set_win=Mock())
-    auto = SimpleNamespace(init_input=Mock())
+    auto = SimpleNamespace(init_input=Mock(), prepare_input=Mock())
     cfg = SimpleNamespace(simulator=False, set_windows=False)
 
     monkeypatch.setattr(script_task_scheme, "IS_LINUX", True)
@@ -114,3 +121,36 @@ def test_linux_init_game_does_not_start_steam_twice(monkeypatch) -> None:
 
     game.start_game.assert_not_called()
     screen.init_handle.assert_called_once_with()
+    auto.prepare_input.assert_called_once_with()
+
+
+@pytest.mark.parametrize("gate_changed", [False, True])
+def test_linux_team_scroll_uses_input_gate_and_existing_swipe(monkeypatch, gate_changed) -> None:
+    handler = object.__new__(linux_input.LinuxInput)
+    drag = Mock()
+    monkeypatch.setattr(handler, "pos_offset", lambda x, y: (x + 100, y + 200))
+    monkeypatch.setattr(handler, "_drag_path", drag)
+    monkeypatch.setattr(linux_input, "LinuxInput", lambda: handler)
+    monkeypatch.setattr(automation_module, "IS_WINDOWS", False)
+    monkeypatch.setattr(
+        automation_module,
+        "cfg",
+        SimpleNamespace(simulator=False, win_input_type="foreground", memory_protection=False),
+    )
+
+    auto = object.__new__(automation_module.Automation)
+    auto.input_handler = None
+    auto._input_lock = threading.RLock()
+    auto._interaction_gate = Mock()
+    auto._interaction_gate.wait.return_value = True
+    auto._interaction_gate.is_set.side_effect = [False, True] if gate_changed else [True]
+    auto.init_input()
+
+    auto.mouse_swipe_for_team_scroll(10, 20, duration=0.3, dy=-400, move_back=False)
+
+    assert auto._interaction_gate.wait.call_count == (2 if gate_changed else 1)
+    drag.assert_called_once()
+    plan = drag.call_args.args[0]
+    assert plan[0][0] == (110, 220)
+    assert plan[-1][0] == (110, -180)
+    assert drag.call_args.kwargs["move_back"] is False

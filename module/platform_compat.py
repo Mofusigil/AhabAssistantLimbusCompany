@@ -15,6 +15,12 @@ IS_WINDOWS = os.name == "nt"
 IS_LINUX = sys.platform.startswith("linux")
 
 
+def is_wayland_session() -> bool:
+    """识别 Wayland 桌面；DISPLAY 同时存在只说明提供了 XWayland。"""
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").casefold()
+    return IS_LINUX and (session_type == "wayland" or (session_type != "x11" and bool(os.environ.get("WAYLAND_DISPLAY"))))
+
+
 def _external_process_environment() -> dict[str, str]:
     """为系统外部程序恢复宿主环境，避免继承 PyInstaller 的动态库路径。"""
     env = os.environ.copy()

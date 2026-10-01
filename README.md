@@ -84,14 +84,17 @@
 
 Linux 平台（x86_64）支持两种运行方式：
 
-1. **本机游戏模式**：通过 Steam/Proton 运行 Limbus Company，AALC 以 X11 协议定位游戏窗口并截图、输入。
+1. **本机游戏模式**：通过 Steam/Proton 运行 Limbus Company，以 X11/XWayland 定位游戏窗口并截图；X11 桌面使用 pyautogui 输入，Wayland 桌面使用系统授权的 RemoteDesktop portal 输入。
 2. **模拟器模式**：通过 ADB 连接任意 Android 模拟器/设备（如 Waydroid 或远程设备），截图与输入全部走 ADB 通道。该模式在 Linux 下尚未经实际测试验证。
 
 Linux 版的已知差异与要求：
 
-- 需要 **X11 会话**，或提供 XWayland 的 Wayland 会话（游戏经 Proton 默认以 X11 窗口运行）。
-  部分桌面环境（如启用输入限制的 KWin Wayland 会话）可能阻止程序注入鼠标键盘事件，遇到该问题时请改用 X11 会话或模拟器（ADB）模式。
-- 输入方式统一为前台输入（pyautogui/XTEST），设置中的“后台点击/窗口移动点击”选项在 Linux 下不生效。
+- 支持 **X11 会话**，以及提供 XWayland 的 **KDE Plasma Wayland 会话**（实验性支持，仍需完整游戏流程实测）。游戏须作为 XWayland 窗口运行；原生 Wine Wayland 窗口暂不支持自动定位和截图。
+- Wayland 需安装 `xdg-desktop-portal`、`xdg-desktop-portal-kde` 和 `xorg-xwayland`（包名可能随发行版不同），Python 依赖使用 `uv sync` 安装。无需给 AALC 提权或配置 `/dev/uinput` 权限。
+  首次启动任务时，在系统授权窗口中允许键盘、鼠标控制，并选择**游戏所在的显示器**。授权会在当前 AALC 进程中复用；取消或撤销授权会停止输入，重新启动任务可再次授权。强制停止任务会关闭该会话。
+- KDE Wayland 输入按每个显示器的逻辑尺寸换算，支持分数缩放和不同缩放比例的多屏组合；切换屏幕分辨率或缩放后，请重启 AALC 并重新授权。游戏必须位于已授权屏幕内。
+- 输入方式统一为前台输入，设置中的“后台点击/窗口移动点击”选项在 Linux 下不生效。请保持游戏窗口可见；Wayland 下不会回退到 XWayland 根窗口截图。
+- Wayland 全局快捷键仍使用 pynput/XWayland，可能受桌面的旧版 X11 应用权限限制；无法响应时，请使用 AALC 界面的暂停和停止按钮。
 - 窗口透明与鼠标穿透（后台模式的附属功能）在 X11 下不可用，会自动跳过。
 - Windows 专属的 MuMu 模拟器 IPC 通道在 Linux 下不可用，模拟器模式请使用 ADB 连接方式（设置中的 BlueStacks/通用模拟器选项，或直接填写远程 ADB 地址）。
 - 任务完成通知使用 `notify-send`（绝大多数桌面环境自带）；防休眠使用 `systemd-inhibit`。

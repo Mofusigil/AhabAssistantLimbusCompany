@@ -5,7 +5,10 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux X11 input backend")
 def test_x11_mouse_click_uses_pyautogui_for_move_and_click(monkeypatch) -> None:
     """X11 must use the original pyautogui path instead of split XTEST injection."""
 

@@ -16,6 +16,7 @@ from Xlib.protocol import event as xevent
 
 from module.game_and_screen.screen import Handle
 from module.logger import log
+from module.platform_compat import is_wayland_session
 
 # WM_STATE 状态码
 NormalState = 1
@@ -467,6 +468,24 @@ class X11Handle(Handle):
             monitors = [(0, 0, geo.width, geo.height)]
         return monitors
 
+    @_serialized
+    def input_monitors(self) -> list[dict]:
+        """保留 XRandR 输出名称，供 Wayland portal 按显示器换算坐标。"""
+        res = randr.get_screen_resources(self._root)
+        monitors = []
+        for output in res.outputs:
+            info = randr.get_output_info(self._root, output, res.config_timestamp)
+            if not info.crtc:
+                continue
+            crtc = randr.get_crtc_info(self._root, info.crtc, res.config_timestamp)
+            if crtc.width <= 0 or crtc.height <= 0:
+                continue
+            name = info.name.decode("utf-8") if isinstance(info.name, bytes) else str(info.name)
+            monitors.append({"name": name, "rect": (crtc.x, crtc.y, crtc.x + crtc.width, crtc.y + crtc.height)})
+        if not monitors:
+            raise RuntimeError("XWayland 未返回有效的显示器信息，无法准确定位输入")
+        return monitors
+
     # ------------------------------------------------------------------ 操作
     def _send_net_wm_state(self, action: int, atoms: list) -> None:
         state_atom = self._dpy.intern_atom("_NET_WM_STATE", True)
@@ -521,9 +540,13 @@ class X11Handle(Handle):
             self.restore()
             time.sleep(0.5)
         try:
-            # 确保窗口聚焦，XTEST 注入的按键才会送达游戏
             self.setForeground()
             time.sleep(0.2)
+            if is_wayland_session():
+                from module.automation.input_handlers.wayland_portal import portal_input
+
+                portal_input.hotkey("alt", "enter")
+                return True
             alt_kc = self._dpy.keysym_to_keycode(XK.string_to_keysym("Alt_L"))
             enter_kc = self._dpy.keysym_to_keycode(XK.string_to_keysym("Return"))
             xtest.fake_input(self._dpy, X.KeyPress, alt_kc)

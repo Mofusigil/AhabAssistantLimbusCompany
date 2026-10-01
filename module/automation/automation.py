@@ -137,6 +137,11 @@ class Automation(metaclass=SingletonMeta):
                 setattr(self, name, method)
         self.memory_protection = cfg.memory_protection
 
+    def prepare_input(self) -> None:
+        """窗口就绪后准备桌面输入；Wayland 授权失败时中止任务。"""
+        if not IS_WINDOWS and not cfg.simulator:
+            self.input_handler.prepare()
+
     def suspend_interactions(self) -> None:
         """暂时阻止业务线程继续点击。"""
         self._interaction_gate.clear()
@@ -158,6 +163,9 @@ class Automation(metaclass=SingletonMeta):
                 from module.game_and_screen.x11_handle import reset_serialization_lock
 
                 reset_serialization_lock()
+                from module.automation.input_handlers.wayland_portal import portal_input
+
+                portal_input.reset()
             except ImportError:
                 pass
 
