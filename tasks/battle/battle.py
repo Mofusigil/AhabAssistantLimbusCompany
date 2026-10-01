@@ -668,6 +668,8 @@ class Battle:
 
             auto.mouse_to_blank()
 
+            sleep(0.5)
+
             auto.key_press("enter")
 
             sleep(1)

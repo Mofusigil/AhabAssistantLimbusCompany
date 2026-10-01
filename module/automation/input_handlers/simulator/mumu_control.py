@@ -22,6 +22,7 @@ from module.my_error.my_error import userStopError
 from utils.utils import run_as_user
 
 from .. import AbstractInput
+from ..scroll_swipe import build_scroll_swipe_plan
 from . import insert_swipe
 
 usual_key_code = {
@@ -73,6 +74,11 @@ usual_key_code = {
     "ctrl": 29,
     "alt": 56,
 }
+
+MUMU_TEAM_SCROLL_ESCAPE_DISTANCE_AT_1080P = 60
+MUMU_TEAM_SCROLL_ESCAPE_HOLD_DURATION = 0.1
+MUMU_TEAM_SCROLL_SETTLE_DURATION = 0.5
+MUMU_TEAM_SCROLL_SETTLE_STEP_DURATION = 0.05
 
 
 class NemuIpcIncompatible(Exception):
@@ -1201,9 +1207,78 @@ class MumuControl(AbstractInput):
                 self.down(*point)
                 time.sleep(0.020)
 
-            # Keep the release stationary long enough to stop list momentum, but
-            # well below mouse_drag's old 500 ms hold that could reorder a team.
             time.sleep(0.200)
+        finally:
+            self.up()
+
+    def mouse_swipe_for_team_scroll(
+        self, x, y, duration=0.3, dx=0, dy=0, move_back=True
+    ) -> None:
+        """Scroll the team list without triggering team reordering or momentum."""
+        distance = (dx**2 + dy**2) ** 0.5
+        if distance == 0:
+            return
+
+        escape_distance = (
+            MUMU_TEAM_SCROLL_ESCAPE_DISTANCE_AT_1080P * cfg.set_win_size / 1080
+        )
+        unit_x = dx / distance
+        unit_y = dy / distance
+        # Upward page swipes must begin inside the visible team rows. Downward
+        # reset swipes shift their touch point instead, keeping the endpoint
+        # inside the client while preserving the same post-escape distance.
+        shift_start = dy > 0
+        touch_x = x - unit_x * escape_distance if shift_start else x
+        touch_y = y - unit_y * escape_distance if shift_start else y
+        plan = build_scroll_swipe_plan(
+            touch_x,
+            touch_y,
+            dx + unit_x * escape_distance,
+            dy + unit_y * escape_distance,
+            duration,
+            escape_distance=escape_distance,
+            escape_duration=0,
+        )
+        start = plan[0][0]
+        self.down(*start)
+        try:
+            if len(plan) > 1:
+                escape, escape_duration = plan[1]
+                time.sleep(escape_duration)
+                self.down(*escape)
+                # Give the game one render frame to recognize this as a scroll
+                # before measuring the remaining, row-accurate part of the drag.
+                time.sleep(MUMU_TEAM_SCROLL_ESCAPE_HOLD_DURATION)
+
+                end, remaining_duration = plan[-1]
+                if end != escape:
+                    move_x = end[0] - escape[0]
+                    move_y = end[1] - escape[1]
+                    point_spacing = 8 * cfg.set_win_size / 1080
+                    segment_count = max(
+                        int((move_x**2 + move_y**2) ** 0.5 / point_spacing),
+                        1,
+                    )
+                    segment_duration = remaining_duration / segment_count
+                    for step in range(1, segment_count + 1):
+                        time.sleep(segment_duration)
+                        ratio = step / segment_count
+                        self.down(
+                            escape[0] + move_x * ratio,
+                            escape[1] + move_y * ratio,
+                        )
+
+            if len(plan) > 1:
+                end = plan[-1][0]
+                settle_steps = round(
+                    MUMU_TEAM_SCROLL_SETTLE_DURATION
+                    / MUMU_TEAM_SCROLL_SETTLE_STEP_DURATION
+                )
+                # Refresh the stationary contact while holding it. MuMu's
+                # velocity tracker then sees an explicit zero-speed tail.
+                for _ in range(settle_steps):
+                    time.sleep(MUMU_TEAM_SCROLL_SETTLE_STEP_DURATION)
+                    self.down(*end)
         finally:
             self.up()
 

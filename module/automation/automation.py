@@ -1,4 +1,5 @@
 import gc
+import inspect
 import math
 import random
 import threading
@@ -54,6 +55,7 @@ class Automation(metaclass=SingletonMeta):
         self.init_input()
 
         self.img_cache = {}
+        self._unavailable_feature_templates: set[str] = set()
         self.last_screenshot_time = 0
         self.last_click_time = 0
         self.model = "clam"
@@ -116,6 +118,23 @@ class Automation(metaclass=SingletonMeta):
         assert isinstance(self.input_handler, AbstractInput), "输入处理器必须是AbstractInput的实例"
         self.set_pause = self.input_handler.set_pause
         self.wait_pause = self.input_handler.wait_pause
+
+        self.mouse_click = self.input_handler.mouse_click
+        self.mouse_click_blank = self.input_handler.mouse_click_blank
+        self.mouse_drag = self.input_handler.mouse_drag
+        self.mouse_swipe_for_scroll = self.input_handler.mouse_swipe_for_scroll
+        self.mouse_drag_down = self.input_handler.mouse_drag_down
+        self.mouse_scroll = self.input_handler.mouse_scroll
+        self.mouse_to_blank = self.input_handler.mouse_to_blank
+        self.mouse_drag_link = self.input_handler.mouse_drag_link
+        self.key_press = self.input_handler.key_press
+        self.input_text = self.input_handler.input_text
+
+        methods = inspect.getmembers(AbstractInput, predicate=inspect.isfunction)
+        for name, method in methods:
+            if name.startswith("mouse_") or name.startswith("key_") or name.startswith("input_"):
+                method = self._run_business_interaction(name)
+                setattr(self, name, method)
         self.memory_protection = cfg.memory_protection
 
     def suspend_interactions(self) -> None:
@@ -142,53 +161,27 @@ class Automation(metaclass=SingletonMeta):
             except ImportError:
                 pass
 
-    def _run_business_interaction(self, method_name: str, *args, **kwargs):
+    def _run_business_interaction(self, method_name: str):
         """在交互门放行且取得输入锁后执行一次业务输入。
 
         交互门可能在等待输入锁期间被监控线程关闭，因此取得锁后需要再次确认。
         门连续关闭超过 GATE_WAIT_TIMEOUT 时视为监控卡在持久弹窗上，放行业务
         输入，让业务流程自身的卡死兜底(如 check_times)得以继续运行。
         """
-        while True:
-            gate_open = self._interaction_gate.wait(timeout=GATE_WAIT_TIMEOUT)
-            with self._input_lock:
-                if gate_open and self._interaction_gate.is_set():
-                    method = getattr(self.input_handler, method_name)
-                    return method(*args, **kwargs)
-                if not gate_open:
-                    method = getattr(self.input_handler, method_name)
-                    return method(*args, **kwargs)
-                # gate_open 但等待输入锁期间门被关闭:重新等待
 
-    def mouse_click(self, x, y, times=1):
-        return self._run_business_interaction("mouse_click", x, y, times=times)
+        def wrapper(*args, **kwargs):
+            while True:
+                gate_open = self._interaction_gate.wait(timeout=GATE_WAIT_TIMEOUT)
+                with self._input_lock:
+                    if gate_open and self._interaction_gate.is_set():
+                        method = getattr(self.input_handler, method_name)
+                        return method(*args, **kwargs)
+                    if not gate_open:
+                        method = getattr(self.input_handler, method_name)
+                        return method(*args, **kwargs)
+                    # gate_open 但等待输入锁期间门被关闭:重新等待
 
-    def mouse_click_blank(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_click_blank", *args, **kwargs)
-
-    def mouse_drag(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_drag", *args, **kwargs)
-
-    def mouse_swipe_for_scroll(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_swipe_for_scroll", *args, **kwargs)
-
-    def mouse_drag_down(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_drag_down", *args, **kwargs)
-
-    def mouse_scroll(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_scroll", *args, **kwargs)
-
-    def mouse_to_blank(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_to_blank", *args, **kwargs)
-
-    def mouse_drag_link(self, *args, **kwargs):
-        return self._run_business_interaction("mouse_drag_link", *args, **kwargs)
-
-    def key_press(self, *args, **kwargs):
-        return self._run_business_interaction("key_press", *args, **kwargs)
-
-    def input_text(self, *args, **kwargs):
-        return self._run_business_interaction("input_text", *args, **kwargs)
+        return wrapper
 
     def monitor_mouse_click(self, x, y, times=1):
         """由系统监控线程点击，不等待该监控线程设置的互斥门。"""
@@ -494,7 +487,9 @@ class Automation(metaclass=SingletonMeta):
                 time.sleep(1)  # 在重试前等待一定时间
         return None
 
-    def find_image_with_multiple_targets(self, target: str, threshold, my_crop=None, min_dist=10, additional_stack=0) -> List:
+    def find_image_with_multiple_targets(
+        self, target: str, threshold, my_crop=None, min_dist=10, additional_stack=0
+    ) -> List:
         """
         在当前截图中查找多个目标图像的位置
         """
@@ -510,7 +505,9 @@ class Automation(metaclass=SingletonMeta):
             if my_crop:
                 crop_offset = (int(round(my_crop[0])), int(round(my_crop[1])))
                 screenshot = ImageUtils.crop(screenshot, my_crop)
-            matches = ImageUtils.match_template_with_multiple_targets(screenshot, template, threshold, min_dist=min_dist)
+            matches = ImageUtils.match_template_with_multiple_targets(
+                screenshot, template, threshold, min_dist=min_dist
+            )
             if crop_offset != (0, 0):
                 matches = [(x + crop_offset[0], y + crop_offset[1]) for x, y in matches]
             if len(matches) == 0:
@@ -669,8 +666,23 @@ class Automation(metaclass=SingletonMeta):
         寻找特征元素所在的坐标位置
         """
         try:
+            unavailable_templates = getattr(self, "_unavailable_feature_templates", None)
+            if unavailable_templates is None:
+                unavailable_templates = set()
+                self._unavailable_feature_templates = unavailable_templates
+            if target in unavailable_templates:
+                return None
+
             template = ImageUtils.load_image(target, resize=False)
+            if template is None or not isinstance(template, np.ndarray) or template.size == 0:
+                unavailable_templates.add(target)
+                return None
+
+            if self.screenshot is None:
+                return None
             screenshot = np.array(self.screenshot)
+            if screenshot.size == 0 or screenshot.ndim < 2 or 0 in screenshot.shape[:2]:
+                return None
             if cfg.set_win_size < 1440:
                 screenshot = cv2.resize(
                     screenshot,
@@ -693,6 +705,8 @@ class Automation(metaclass=SingletonMeta):
                 elif cfg.set_win_size > 1440:
                     pic_crop = [int(i * cfg.set_win_size / 1440) for i in pic_crop]
                 screenshot = ImageUtils.crop(screenshot, pic_crop)
+                if screenshot.size == 0 or screenshot.ndim < 2 or 0 in screenshot.shape[:2]:
+                    return None
             result, num_matches = ImageUtils.feature_matching(template, screenshot, min_matches)
             log.debug(
                 f"匹配目标特征图片：{target.replace('./assets/images/', '')}结果{result}, 找到 {num_matches} 个匹配点",
@@ -710,6 +724,7 @@ class Automation(metaclass=SingletonMeta):
     def clear_img_cache(self) -> None:
         """清除图片缓存"""
         self.img_cache.clear()
+        self._unavailable_feature_templates.clear()
         gc.collect()  # 强制垃圾回收，清理内存
         log.debug("图片缓存已清除", stacklevel=2)
 
