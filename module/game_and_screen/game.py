@@ -4,7 +4,7 @@ from time import sleep, time
 import psutil
 
 from module.config import cfg
-from module.platform_compat import IS_LINUX, IS_WINDOWS, open_uri
+from module.platform_compat import IS_LINUX, IS_WINDOWS, open_uri, start_detached
 from utils.singletonmeta import SingletonMeta
 
 
@@ -59,6 +59,13 @@ class Game(metaclass=SingletonMeta):
             self.game_path_exists = False
 
         try:
+            launch_script = os.environ.get("AALC_GAME_LAUNCH_SCRIPT", "").strip() if IS_LINUX else ""
+            if launch_script and os.path.isfile(launch_script):
+                start_detached([launch_script])
+                self.log.info("使用隔离显示脚本启动游戏")
+                sleep(5)
+                return True
+
             # 调用系统协议处理器打开 steam:// 链接（触发 Steam 启动游戏）
             open_uri(self.game_url)
             self.log.info("使用steam命令启动游戏")
