@@ -15,6 +15,7 @@ from module.my_error.my_error import (
     unableToFindTeamError,
 )
 from module.ocr import ocr
+from module.platform_compat import IS_WINDOWS
 from tasks import all_systems, observe_system, start_gift
 from tasks.base.back_init_menu import back_init_menu
 from tasks.base.make_enkephalin_module import make_enkephalin_module
@@ -1098,7 +1099,7 @@ class Mirror:
                 if retry() is False:
                     return False
             for _ in range(3):
-                if cfg.background_click:
+                if IS_WINDOWS and cfg.background_click:
                     continue
                 while auto.take_screenshot() is None:
                     continue

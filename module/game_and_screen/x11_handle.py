@@ -109,6 +109,8 @@ class X11Handle(Handle):
 
     def _get_atom_value(self, win, atom_name: str):
         atom = self._dpy.intern_atom(atom_name, True)
+        if not atom:
+            return None
         prop = win.get_full_property(atom, X.AnyPropertyType)
         if prop is None or prop.value is None or len(prop.value) == 0:
             return None
@@ -172,7 +174,12 @@ class X11Handle(Handle):
                 tpl = cv2.imread(tpl_path, cv2.IMREAD_GRAYSCALE)
                 if tpl is None:
                     continue
-                t = cv2.resize(tpl, None, fx=scale, fy=scale)
+                if tpl_path.endswith("assets.png") and np.any(tpl > 0):
+                    from utils.image_utils import ImageUtils
+
+                    tpl = ImageUtils.crop(tpl, ImageUtils.get_bbox(tpl))
+                interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+                t = cv2.resize(tpl, None, fx=scale, fy=scale, interpolation=interp)
                 if t.shape[0] >= sub.shape[0] or t.shape[1] >= sub.shape[1]:
                     continue
                 res = cv2.matchTemplate(sub, t, cv2.TM_CCOEFF_NORMED)
@@ -358,7 +365,11 @@ class X11Handle(Handle):
             return False
         try:
             value = self._get_atom_value(self._root, "_NET_ACTIVE_WINDOW")
-            return value and int(value[0]) == self._hwnd
+            if value:
+                return int(value[0]) == self._hwnd
+            # 无 EWMH WM（如隔离 rootful Xwayland）时回退检查 X11 输入焦点
+            focus = self._dpy.get_input_focus().focus
+            return getattr(focus, "id", None) == self._hwnd
         except Exception:
             return False
 
@@ -495,6 +506,8 @@ class X11Handle(Handle):
     # ------------------------------------------------------------------ 操作
     def _send_net_wm_state(self, action: int, atoms: list) -> None:
         state_atom = self._dpy.intern_atom("_NET_WM_STATE", True)
+        if not state_atom or not atoms or not atoms[0]:
+            return
         data = [action, atoms[0], atoms[1] if len(atoms) > 1 else 0, 0, 0]
         # 注意：event_mask 只能传给 send_event；放进 ClientMessage 构造参数会
         # 被 rq.Event.__init__ 当作待序列化字段而抛 TypeError（to_binary() ...）
@@ -508,6 +521,8 @@ class X11Handle(Handle):
 
     def _send_net_active(self) -> None:
         active_atom = self._dpy.intern_atom("_NET_ACTIVE_WINDOW", True)
+        if not active_atom:
+            return
         ev = xevent.ClientMessage(
             window=self._hwnd,
             client_type=active_atom,
@@ -523,7 +538,12 @@ class X11Handle(Handle):
             return
         try:
             self._send_net_active()
-            self._window_obj().configure(stack_mode=X.Above)
+            win = self._window_obj()
+            win.configure(stack_mode=X.Above)
+            try:
+                win.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
+            except XError:
+                pass
             self._dpy.flush()
         except Exception as e:
             log.debug(f"窗口置前失败: {e}")
@@ -753,8 +773,26 @@ class X11Handle(Handle):
         target_h = int(cfg.set_win_size)
         target_w = int(target_h * 16 / 9)
         content_offset_cache = getattr(self, "_content_offset_cache", None)
-        for client_h in (target_h + 50, target_h, target_h + 80, target_h + 30):
+        mon_w, mon_h = self.monitor_size()
+
+        def _ensure_within_bounds(req_w: int, req_h: int) -> None:
+            rect = self.rect(True)
+            if (
+                rect[0] < 0
+                or rect[1] < 0
+                or (mon_w > 0 and rect[0] + req_w > mon_w)
+                or (mon_h > 0 and rect[1] + req_h > mon_h)
+            ):
+                self.set_window_pos(0, 0)
+
+        initial_rect = self.rect(True)
+        initial_size = (initial_rect[2] - initial_rect[0], initial_rect[3] - initial_rect[1])
+        _ensure_within_bounds(target_w, target_h)
+
+        for client_h in (target_h, target_h + 50, target_h + 80, target_h + 30):
+            _ensure_within_bounds(target_w, client_h)
             self.set_window_size(target_w, client_h)
+            _ensure_within_bounds(target_w, client_h)
             time.sleep(1.2)
             img = self.capture_window_image()
             if img is None or content_offset_cache is None:
@@ -766,6 +804,9 @@ class X11Handle(Handle):
                 )
                 break
         else:
+            if initial_size == (target_w, target_h):
+                self.set_window_size(target_w, target_h)
+                _ensure_within_bounds(target_w, target_h)
             log.warning(
                 f"未能把游戏画布对齐到 {target_w}x{target_h}（Wine 标题栏宽度不定），"
                 "将继续执行任务；若识别异常，请把游戏窗口手动调整为窗口模式后重试"

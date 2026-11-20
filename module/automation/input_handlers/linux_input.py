@@ -43,6 +43,7 @@ class LinuxInput(AbstractInput, metaclass=SingletonMeta):
             screen.handle.setForeground()
         else:
             self.backend
+            screen.handle.setForeground()
 
     @staticmethod
     def _window_is_ready() -> bool:

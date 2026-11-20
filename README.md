@@ -89,6 +89,8 @@ Linux（x86_64）可从源码运行或本地构建。本机游戏模式通过 St
 - KDE Wayland 支持按显示器逻辑尺寸换算分数缩放和多屏坐标；分辨率或缩放改变后，请重启并重新授权。游戏必须位于已授权屏幕内，且使用 XWayland 窗口；原生 Wine Wayland 窗口暂不支持定位和截图。
 - Wayland 全局快捷键使用 pynput/XWayland，可能受桌面权限限制；可通过 AALC 界面的暂停、停止按钮操作。窗口截图失败时不会回退到 XWayland 根窗口。
 - 输入统一使用前台模式，请保持游戏窗口可见；“后台点击/窗口移动点击”、窗口透明和鼠标穿透在 Linux 下不可用。
+- **不抢占键鼠的隔离后台模式（实验性）**：若希望在 Wayland/X11 桌面上后台挂机、不抢占宿主鼠标和键盘控制权，可通过 `./scripts/start_isolated.sh` 启动。脚本会拉起一个无窗口管理器的隔离 `Xwayland` 显示器：AALC 界面运行在宿主桌面，游戏（`./scripts/launch_limbus_isolated.sh`）与截图/键鼠自动化全部运行在隔离 X11 显示中；无需关闭宿主屏幕上的游戏即可正常操作自己的电脑。可通过 `AALC_ISOLATED_DISPLAY`、`AALC_PROTON_BIN`、`AALC_GAME_DIR`、`AALC_COMPAT_DATA`、`AALC_GAME_EXTRA_ARGS` 等环境变量自定义。
+- 若源码运行时需要手动同步最新图像识别模板，可执行 `uv run python scripts/sync_images.py`。
 - 模拟器模式使用 ADB（如 Waydroid 或远程 Android 设备），尚需实际游戏流程验证；Windows 专属的 MuMu IPC 会回退到通用 ADB 通道。
 - Python 依赖通过 `uv sync` 安装；模拟器模式还需系统提供 `adb`（如 `android-tools` 包）。
 - 桌面通知使用 `notify-send`，防休眠使用 `systemd-inhibit`；每日定时任务使用 systemd 用户定时器，登录自启动使用 XDG autostart。
